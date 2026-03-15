@@ -329,6 +329,9 @@ function drawBackground() {
   ctx.beginPath(); ctx.arc(W - 70, 75, 4, 0, Math.PI*2); ctx.fill();
   ctx.beginPath(); ctx.arc(W - 55, 82, 3, 0, Math.PI*2); ctx.fill();
 
+  // Background candlestick chart (semi-transparent)
+  drawBgChart();
+
   // Scrolling price ticker at bottom of sky
   ctx.font = '11px monospace';
   ctx.fillStyle = 'rgba(0,200,100,0.4)';
@@ -336,6 +339,70 @@ function drawBackground() {
   const tw = ctx.measureText(tickerText).width;
   const tickX = ((frame * 0.8) % tw);
   ctx.fillText(tickerText + tickerText, -tickX, H - GROUND_H - 8);
+}
+
+// Static bg chart data — pre-generated realistic OHLC candles
+const BG_CANDLES = (function() {
+  const arr = [];
+  let price = 220;
+  for (let i = 0; i < 28; i++) {
+    const open = price;
+    const change = (Math.random() - 0.46) * 22;
+    const close = Math.max(60, Math.min(420, open + change));
+    const high = Math.max(open, close) + Math.random() * 14;
+    const low = Math.min(open, close) - Math.random() * 14;
+    arr.push({ open, close, high, low });
+    price = close;
+  }
+  return arr;
+})();
+
+function drawBgChart() {
+  const cw = 11;   // candle body width
+  const gap = 4;   // gap between candles
+  const step = cw + gap;
+  const chartH = 200; // chart area height
+  const chartY = 90;  // top of chart area
+  const totalCandles = BG_CANDLES.length;
+
+  // Find price range for scaling
+  let minP = Infinity, maxP = -Infinity;
+  for (const c of BG_CANDLES) { minP = Math.min(minP, c.low); maxP = Math.max(maxP, c.high); }
+  const range = maxP - minP || 1;
+  const toY = p => chartY + chartH - ((p - minP) / range) * chartH;
+
+  // Slow horizontal scroll
+  const scrollOffset = (frame * 0.3) % step;
+
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+
+  for (let i = 0; i < totalCandles + 2; i++) {
+    const idx = i % totalCandles;
+    const c = BG_CANDLES[idx];
+    const x = i * step - scrollOffset;
+    if (x + cw < 0 || x > W) continue;
+
+    const isGreen = c.close >= c.open;
+    const bodyTop = toY(Math.max(c.open, c.close));
+    const bodyBot = toY(Math.min(c.open, c.close));
+    const bodyH = Math.max(2, bodyBot - bodyTop);
+    const wickX = x + cw / 2;
+
+    // Wick
+    ctx.strokeStyle = isGreen ? '#00e676' : '#ff5252';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(wickX, toY(c.high));
+    ctx.lineTo(wickX, toY(c.low));
+    ctx.stroke();
+
+    // Body
+    ctx.fillStyle = isGreen ? '#00c853' : '#d50000';
+    ctx.fillRect(x, bodyTop, cw, bodyH);
+  }
+
+  ctx.restore();
 }
 
 function checkCollision() {
