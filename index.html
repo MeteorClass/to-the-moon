@@ -127,6 +127,15 @@ function addHof(s){ hof.push(s); hof.sort((a,b)=>b-a); hof=hof.slice(0,5); saveH
 const stars=[];
 for(let i=0;i<80;i++) stars.push({x:Math.random()*W,y:Math.random()*(H-GROUND_H),r:Math.random()*1.8+0.3,a:Math.random()*0.7+0.3,tw:Math.random()*Math.PI*2});
 
+// Network nodes
+const NODES=[];
+for(let i=0;i<14;i++) NODES.push({x:Math.random()*W,y:Math.random()*(H-GROUND_H-60)+30,vx:(Math.random()-0.5)*0.18,vy:(Math.random()-0.5)*0.18,r:Math.random()*2.5+1.5});
+
+// Floating crypto logos
+const LOGOS=[];
+const LOGO_SYMS=['₿','Ξ','◎','Ð','⬡'];
+for(let i=0;i<10;i++) LOGOS.push({x:Math.random()*W,y:Math.random()*(H-GROUND_H),vy:-(Math.random()*0.3+0.15),sym:LOGO_SYMS[i%LOGO_SYMS.length],size:Math.random()*10+10,a:Math.random()*0.18+0.06,rot:Math.random()*Math.PI*2,rotV:(Math.random()-0.5)*0.005});
+
 const BGC=(()=>{
   const a=[]; let p=220;
   for(let i=0;i<28;i++){
@@ -264,6 +273,59 @@ function drawGround(){
 }
 
 // ── DRAW BACKGROUND ──────────────────────────────────────
+function drawNodes(){
+  ctx.save();
+  // Update + draw nodes
+  const MAX_DIST=90;
+  for(const n of NODES){
+    n.x+=n.vx; n.y+=n.vy;
+    if(n.x<0||n.x>W) n.vx*=-1;
+    if(n.y<30||n.y>H-GROUND_H-30) n.vy*=-1;
+  }
+  // Draw edges
+  ctx.lineWidth=0.8;
+  for(let i=0;i<NODES.length;i++){
+    for(let j=i+1;j<NODES.length;j++){
+      const dx=NODES[i].x-NODES[j].x, dy=NODES[i].y-NODES[j].y;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      if(dist<MAX_DIST){
+        ctx.globalAlpha=(1-dist/MAX_DIST)*0.18;
+        ctx.strokeStyle='#8888ff';
+        ctx.beginPath(); ctx.moveTo(NODES[i].x,NODES[i].y); ctx.lineTo(NODES[j].x,NODES[j].y); ctx.stroke();
+      }
+    }
+  }
+  // Draw node dots
+  for(const n of NODES){
+    ctx.globalAlpha=0.22;
+    ctx.fillStyle='#aaaaff';
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2); ctx.fill();
+    // Pulse ring
+    const pulse=0.5+Math.sin(frame*0.04+n.x)*0.5;
+    ctx.globalAlpha=0.08*pulse;
+    ctx.beginPath(); ctx.arc(n.x,n.y,n.r*3,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawFloatingLogos(){
+  ctx.save();
+  for(const l of LOGOS){
+    l.y+=l.vy; l.rot+=l.rotV;
+    if(l.y<-30) l.y=H-GROUND_H+10;
+    ctx.globalAlpha=l.a;
+    ctx.save();
+    ctx.translate(l.x,l.y);
+    ctx.rotate(l.rot);
+    ctx.font=`bold ${l.size}px Arial`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillStyle='#f7931a';
+    ctx.fillText(l.sym,0,0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawBackground(){
   const cfg=curCfg();
   const gr=ctx.createLinearGradient(0,0,0,H);
@@ -278,6 +340,8 @@ function drawBackground(){
   ctx.beginPath(); ctx.arc(W-60,70,32,0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0; ctx.fillStyle='rgba(200,200,150,0.4)';
   [[W-52,60,6],[W-70,75,4],[W-55,82,3]].forEach(([x,y,r])=>{ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); });
+  drawNodes();
+  drawFloatingLogos();
   drawBgChart(cfg);
   const ph=curPhase();
   ctx.font='11px monospace';
