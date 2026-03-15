@@ -28,7 +28,6 @@
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-
 const BASE_W = 360, BASE_H = 640;
 let scale = 1;
 function resize() {
@@ -45,375 +44,297 @@ const W = BASE_W, H = BASE_H;
 const GRAVITY = 0.45;
 const FLAP = -9;
 const CANDLE_W = 52;
-const GAP = 160;
-const SPEED = 2.8;
-const CANDLE_INTERVAL = 95;
 const GROUND_H = 60;
 
+// ─── AUDIO ───────────────────────────────────────────────
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+function resumeAC() { if (AC.state === 'suspended') AC.resume(); }
+document.addEventListener('pointerdown', resumeAC, { once: true });
+document.addEventListener('keydown', resumeAC, { once: true });
+
+function playTone(freq, type, dur, vol = 0.3, delay = 0) {
+  const o = AC.createOscillator();
+  const g = AC.createGain();
+  o.connect(g); g.connect(AC.destination);
+  o.type = type; o.frequency.setValueAtTime(freq, AC.currentTime + delay);
+  g.gain.setValueAtTime(vol, AC.currentTime + delay);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + delay + dur);
+  o.start(AC.currentTime + delay);
+  o.stop(AC.currentTime + delay + dur + 0.01);
+}
+
+function sfxFlap() {
+  playTone(320, 'sine', 0.07, 0.18);
+  playTone(480, 'sine', 0.05, 0.1, 0.03);
+}
+function sfxCoin() {
+  playTone(880, 'sine', 0.08, 0.2);
+  playTone(1100, 'sine', 0.08, 0.2, 0.06);
+  playTone(1320, 'sine', 0.1, 0.18, 0.12);
+}
+function sfxScore() {
+  playTone(440, 'square', 0.06, 0.12);
+  playTone(550, 'square', 0.06, 0.12, 0.07);
+}
+function sfxDeath() {
+  const o = AC.createOscillator();
+  const g = AC.createGain();
+  o.connect(g); g.connect(AC.destination);
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(400, AC.currentTime);
+  o.frequency.exponentialRampToValueAtTime(60, AC.currentTime + 0.6);
+  g.gain.setValueAtTime(0.35, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + 0.6);
+  o.start(AC.currentTime); o.stop(AC.currentTime + 0.65);
+}
+function sfxMilestone() {
+  [523,659,784,1047].forEach((f,i) => playTone(f,'square',0.12,0.18,i*0.1));
+}
+function sfxMarketChange(isBull) {
+  if (isBull) {
+    [330,440,550,660].forEach((f,i) => playTone(f,'sine',0.1,0.15,i*0.08));
+  } else {
+    [440,330,220,165].forEach((f,i) => playTone(f,'sawtooth',0.1,0.12,i*0.08));
+  }
+}
+
+// Background music (simple lo-fi loop)
+let musicNodes = [];
+function startMusic() {
+  stopMusic();
+  const notes = [130,146,164,174,196,220,246,261];
+  let t = AC.currentTime + 0.1;
+  const loop = () => {
+    if (AC.state === 'closed') return;
+    notes.forEach((n, i) => {
+      const o = AC.createOscillator();
+      const g = AC.createGain();
+      o.connect(g); g.connect(AC.destination);
+      o.type = 'sine';
+      o.frequency.value = n;
+      g.gain.setValueAtTime(0, t + i * 0.5);
+      g.gain.linearRampToValueAtTime(0.04, t + i * 0.5 + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.5 + 0.45);
+      o.start(t + i * 0.5);
+      o.stop(t + i * 0.5 + 0.5);
+      musicNodes.push(o);
+    });
+    t += notes.length * 0.5;
+    if (t < AC.currentTime + 20) musicTimeout = setTimeout(loop, (t - AC.currentTime - 4) * 1000);
+  };
+  loop();
+}
+let musicTimeout;
+function stopMusic() {
+  clearTimeout(musicTimeout);
+  musicNodes.forEach(n => { try { n.stop(); } catch(e){} });
+  musicNodes = [];
+}
+
+// ─── GAME STATE ──────────────────────────────────────────
 let state = 'idle';
-let rocket, candles, score, bestScore, frame, particles, flashTimer, stars, coins;
+let rocket, candles, score, bestScore, frame, particles, flashTimer, coins;
+let market, marketTimer, marketAnnounce, milestoneAnnounce;
+let hallOfFame;
 bestScore = 0;
 
-// Generate static stars
-stars = [];
+// Load hall of fame from localStorage
+try { hallOfFame = JSON.parse(localStorage.getItem('tothemoon_hof') || '[]'); } catch(e) { hallOfFame = []; }
+function saveHallOfFame() {
+  try { localStorage.setItem('tothemoon_hof', JSON.stringify(hallOfFame)); } catch(e) {}
+}
+function addToHallOfFame(s) {
+  hallOfFame.push(s);
+  hallOfFame.sort((a,b) => b - a);
+  hallOfFame = hallOfFame.slice(0, 5);
+  saveHallOfFame();
+}
+
+// Stars
+const stars = [];
 for (let i = 0; i < 80; i++) {
-  stars.push({
-    x: Math.random() * W,
-    y: Math.random() * (H - GROUND_H),
-    r: Math.random() * 1.8 + 0.3,
-    a: Math.random() * 0.7 + 0.3,
-    twinkle: Math.random() * Math.PI * 2
-  });
+  stars.push({ x: Math.random()*W, y: Math.random()*(H-GROUND_H), r: Math.random()*1.8+0.3, a: Math.random()*0.7+0.3, twinkle: Math.random()*Math.PI*2 });
 }
 
-function initGame() {
-  rocket = { x: 75, y: H / 2, vy: 0, rot: 0, w: 44, h: 28, alive: true, frameTimer: 0 };
-  candles = [];
-  coins = [];
-  score = 0;
-  frame = 0;
-  particles = [];
-  flashTimer = 0;
-}
-
-function flap() {
-  if (state === 'idle') { state = 'playing'; rocket.vy = FLAP; }
-  else if (state === 'playing') {
-    rocket.vy = FLAP;
-    for (let i = 0; i < 6; i++) {
-      particles.push({
-        x: rocket.x, y: rocket.y + rocket.h / 2,
-        vx: -Math.random() * 3 - 1,
-        vy: (Math.random() - 0.5) * 2,
-        life: 18, maxLife: 18,
-        r: Math.random() * 4 + 2,
-        color: ['#ff9500','#ffcc00','#ff4500'][Math.floor(Math.random()*3)]
-      });
-    }
-  }
-  else if (state === 'dead') { initGame(); state = 'playing'; rocket.vy = FLAP; }
-}
-
-document.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); flap(); } });
-canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
-
-function spawnCandle() {
-  const minY = 70, maxY = H - GROUND_H - 120 - GAP;
-  const topH = Math.random() * (maxY - minY) + minY;
-  const isGreen = Math.random() > 0.45; // slightly more green = safe passages
-  // Body height (wick extends beyond)
-  const topBodyH = topH * 0.75;
-  const botBodyH = (H - GROUND_H - topH - GAP) * 0.75;
-  candles.push({
-    x: W + 10, topH, isGreen,
-    topBodyH, botBodyH, scored: false
-  });
-  // Coin in middle of gap
-  coins.push({
-    x: W + 10 + CANDLE_W / 2,
-    y: topH + GAP / 2,
-    collected: false,
-    anim: Math.random() * Math.PI * 2
-  });
-}
-
-// Draw rocket with BTC symbol
-function drawRocket() {
-  const r = rocket;
-  ctx.save();
-  ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
-  ctx.rotate(r.rot * Math.PI / 180);
-
-  // Exhaust flame
-  const flameLen = 12 + Math.sin(r.frameTimer * 0.4) * 5;
-  const grad = ctx.createLinearGradient(-r.w/2 - flameLen, 0, -r.w/2, 0);
-  grad.addColorStop(0, 'rgba(255,80,0,0)');
-  grad.addColorStop(0.5, 'rgba(255,160,0,0.9)');
-  grad.addColorStop(1, 'rgba(255,220,0,1)');
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.moveTo(-r.w/2, -5);
-  ctx.lineTo(-r.w/2 - flameLen, 0);
-  ctx.lineTo(-r.w/2, 5);
-  ctx.closePath();
-  ctx.fill();
-
-  // Rocket body
-  const bodyGrad = ctx.createLinearGradient(0, -r.h/2, 0, r.h/2);
-  bodyGrad.addColorStop(0, '#e8e8f0');
-  bodyGrad.addColorStop(1, '#a0a0c0');
-  ctx.fillStyle = bodyGrad;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r.w/2, r.h/2, 0, 0, Math.PI*2);
-  ctx.fill();
-
-  // Nose cone (gold)
-  ctx.fillStyle = '#f5c842';
-  ctx.beginPath();
-  ctx.moveTo(r.w/2, 0);
-  ctx.lineTo(r.w/2 - 14, -r.h/2 + 2);
-  ctx.lineTo(r.w/2 - 14, r.h/2 - 2);
-  ctx.closePath();
-  ctx.fill();
-
-  // Fin bottom
-  ctx.fillStyle = '#f5c842';
-  ctx.beginPath();
-  ctx.moveTo(-r.w/2 + 4, r.h/2 - 2);
-  ctx.lineTo(-r.w/2 - 6, r.h/2 + 10);
-  ctx.lineTo(-r.w/2 + 14, r.h/2 - 2);
-  ctx.closePath();
-  ctx.fill();
-
-  // Fin top
-  ctx.beginPath();
-  ctx.moveTo(-r.w/2 + 4, -r.h/2 + 2);
-  ctx.lineTo(-r.w/2 - 6, -r.h/2 - 10);
-  ctx.lineTo(-r.w/2 + 14, -r.h/2 + 2);
-  ctx.closePath();
-  ctx.fill();
-
-  // Window circle (orange BTC coin)
-  ctx.fillStyle = '#f7931a';
-  ctx.beginPath();
-  ctx.arc(4, 0, 11, 0, Math.PI * 2);
-  ctx.fill();
-
-  // BTC ₿ symbol
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 13px Arial';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('₿', 4, 1);
-
-  // Highlight
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  ctx.beginPath();
-  ctx.ellipse(5, -6, r.w/2 - 10, r.h/2 - 8, -0.3, 0, Math.PI);
-  ctx.fill();
-
-  ctx.restore();
-}
-
-// Draw candlestick obstacle
-function drawCandle(c) {
-  const wickW = 6;
-  const bodyX = c.x;
-  const wickX = c.x + CANDLE_W/2 - wickW/2;
-  const rimExtra = 5;
-
-  const green = c.isGreen;
-  const bodyColor = green ? '#00c853' : '#d50000';
-  const darkColor = green ? '#007722' : '#8b0000';
-  const rimColor = green ? '#00e676' : '#ff5252';
-  const wickColor = green ? '#00a040' : '#aa0000';
-
-  // TOP candle — wick
-  ctx.fillStyle = wickColor;
-  ctx.fillRect(wickX, 0, wickW, c.topH - c.topBodyH);
-
-  // TOP candle — body
-  ctx.fillStyle = bodyColor;
-  ctx.fillRect(bodyX, c.topH - c.topBodyH, CANDLE_W, c.topBodyH);
-  ctx.fillStyle = darkColor;
-  ctx.fillRect(bodyX + CANDLE_W - 12, c.topH - c.topBodyH, 12, c.topBodyH);
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.fillRect(bodyX + 4, c.topH - c.topBodyH, 8, c.topBodyH);
-
-  // TOP rim
-  ctx.fillStyle = rimColor;
-  ctx.fillRect(bodyX - rimExtra, c.topH - 18, CANDLE_W + rimExtra*2, 18);
-
-  // BOTTOM candle — rim
-  const botY = c.topH + GAP;
-  ctx.fillStyle = rimColor;
-  ctx.fillRect(bodyX - rimExtra, botY, CANDLE_W + rimExtra*2, 18);
-
-  // BOTTOM candle — body
-  const botBodyStart = botY + 18;
-  ctx.fillStyle = bodyColor;
-  ctx.fillRect(bodyX, botBodyStart, CANDLE_W, c.botBodyH);
-  ctx.fillStyle = darkColor;
-  ctx.fillRect(bodyX + CANDLE_W - 12, botBodyStart, 12, c.botBodyH);
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.fillRect(bodyX + 4, botBodyStart, 8, c.botBodyH);
-
-  // BOTTOM wick
-  const wickBot = botBodyStart + c.botBodyH;
-  ctx.fillStyle = wickColor;
-  ctx.fillRect(wickX, wickBot, wickW, H - GROUND_H - wickBot);
-}
-
-// Draw coin (BTC style)
-function drawCoin(coin) {
-  if (coin.collected) return;
-  const bob = Math.sin(coin.anim) * 4;
-  ctx.save();
-  ctx.translate(coin.x, coin.y + bob);
-  // Glow
-  ctx.shadowColor = '#f7931a';
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = '#f7931a';
-  ctx.beginPath();
-  ctx.arc(0, 0, 10, 0, Math.PI*2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 10px Arial';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('₿', 0, 1);
-  ctx.restore();
-}
-
-// Draw ground (space platform)
-function drawGround() {
-  const grad = ctx.createLinearGradient(0, H - GROUND_H, 0, H);
-  grad.addColorStop(0, '#1a1a3e');
-  grad.addColorStop(1, '#0a0a1a');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, H - GROUND_H, W, GROUND_H);
-  // Glowing line at top
-  ctx.strokeStyle = '#4040ff';
-  ctx.lineWidth = 2;
-  ctx.shadowColor = '#4040ff';
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.moveTo(0, H - GROUND_H);
-  ctx.lineTo(W, H - GROUND_H);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  // Grid lines
-  ctx.strokeStyle = 'rgba(64,64,255,0.2)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < W; i += 30) {
-    ctx.beginPath();
-    ctx.moveTo(i, H - GROUND_H);
-    ctx.lineTo(i, H);
-    ctx.stroke();
-  }
-}
-
-function drawBackground() {
-  // Deep space gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, '#000008');
-  grad.addColorStop(0.5, '#0a0020');
-  grad.addColorStop(1, '#1a0030');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // Stars
-  for (const s of stars) {
-    s.twinkle += 0.02;
-    const alpha = s.a * (0.6 + Math.sin(s.twinkle) * 0.4);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-
-  // Moon in background
-  ctx.fillStyle = 'rgba(255,255,220,0.9)';
-  ctx.shadowColor = 'rgba(255,255,180,0.5)';
-  ctx.shadowBlur = 20;
-  ctx.beginPath();
-  ctx.arc(W - 60, 70, 32, 0, Math.PI*2);
-  ctx.fill();
-  // Crater details
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = 'rgba(200,200,150,0.4)';
-  ctx.beginPath(); ctx.arc(W - 52, 60, 6, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(W - 70, 75, 4, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(W - 55, 82, 3, 0, Math.PI*2); ctx.fill();
-
-  // Background candlestick chart (semi-transparent)
-  drawBgChart();
-
-  // Scrolling price ticker at bottom of sky
-  ctx.font = '11px monospace';
-  ctx.fillStyle = 'rgba(0,200,100,0.4)';
-  const tickerText = '  BTC +12.4%   ETH +8.2%   SOL +22.1%   DOGE +5.3%   BNB +3.8%   ';
-  const tw = ctx.measureText(tickerText).width;
-  const tickX = ((frame * 0.8) % tw);
-  ctx.fillText(tickerText + tickerText, -tickX, H - GROUND_H - 8);
-}
-
-// Static bg chart data — pre-generated realistic OHLC candles
-const BG_CANDLES = (function() {
-  const arr = [];
-  let price = 220;
+// BG chart
+const BG_CANDLES = (() => {
+  const arr = []; let price = 220;
   for (let i = 0; i < 28; i++) {
     const open = price;
-    const change = (Math.random() - 0.46) * 22;
-    const close = Math.max(60, Math.min(420, open + change));
-    const high = Math.max(open, close) + Math.random() * 14;
-    const low = Math.min(open, close) - Math.random() * 14;
-    arr.push({ open, close, high, low });
+    const change = (Math.random()-0.46)*22;
+    const close = Math.max(60, Math.min(420, open+change));
+    arr.push({ open, close, high: Math.max(open,close)+Math.random()*14, low: Math.min(open,close)-Math.random()*14 });
     price = close;
   }
   return arr;
 })();
 
-function drawBgChart() {
-  const cw = 11;   // candle body width
-  const gap = 4;   // gap between candles
-  const step = cw + gap;
-  const chartH = 200; // chart area height
-  const chartY = 90;  // top of chart area
-  const totalCandles = BG_CANDLES.length;
+// ─── MARKET PHASES ───────────────────────────────────────
+// Bull: wider gap, faster | Bear: tighter gap, slower, more red candles
+const PHASES = {
+  bull: { label: '🐂 BULL RUN!', gap: 170, speed: 3.1, interval: 88, redChance: 0.3, color: '#00c853', bg1: '#000820', bg2: '#001830' },
+  bear: { label: '🐻 BEAR MARKET!', gap: 140, speed: 2.5, interval: 100, redChance: 0.65, color: '#d50000', bg1: '#1a0000', bg2: '#0d000d' }
+};
 
-  // Find price range for scaling
-  let minP = Infinity, maxP = -Infinity;
-  for (const c of BG_CANDLES) { minP = Math.min(minP, c.low); maxP = Math.max(maxP, c.high); }
-  const range = maxP - minP || 1;
-  const toY = p => chartY + chartH - ((p - minP) / range) * chartH;
+function initGame() {
+  rocket = { x: 75, y: H/2, vy: 0, rot: 0, w: 44, h: 28, alive: true, frameTimer: 0 };
+  candles = []; coins = []; score = 0; frame = 0;
+  particles = []; flashTimer = 0;
+  market = 'bull'; marketTimer = 0;
+  marketAnnounce = null; milestoneAnnounce = null;
+}
 
-  // Slow horizontal scroll
-  const scrollOffset = (frame * 0.3) % step;
+function getPhase() { return PHASES[market]; }
 
-  ctx.save();
-  ctx.globalAlpha = 0.18;
-
-  for (let i = 0; i < totalCandles + 2; i++) {
-    const idx = i % totalCandles;
-    const c = BG_CANDLES[idx];
-    const x = i * step - scrollOffset;
-    if (x + cw < 0 || x > W) continue;
-
-    const isGreen = c.close >= c.open;
-    const bodyTop = toY(Math.max(c.open, c.close));
-    const bodyBot = toY(Math.min(c.open, c.close));
-    const bodyH = Math.max(2, bodyBot - bodyTop);
-    const wickX = x + cw / 2;
-
-    // Wick
-    ctx.strokeStyle = isGreen ? '#00e676' : '#ff5252';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(wickX, toY(c.high));
-    ctx.lineTo(wickX, toY(c.low));
-    ctx.stroke();
-
-    // Body
-    ctx.fillStyle = isGreen ? '#00c853' : '#d50000';
-    ctx.fillRect(x, bodyTop, cw, bodyH);
+// ─── INPUT ────────────────────────────────────────────────
+function flap() {
+  resumeAC();
+  if (state === 'idle') { state = 'playing'; rocket.vy = FLAP; sfxFlap(); startMusic(); }
+  else if (state === 'playing') {
+    rocket.vy = FLAP; sfxFlap();
+    for (let i = 0; i < 6; i++) particles.push({ x: rocket.x, y: rocket.y+rocket.h/2, vx: -Math.random()*3-1, vy: (Math.random()-0.5)*2, life: 18, maxLife: 18, r: Math.random()*4+2, color: ['#ff9500','#ffcc00','#ff4500'][Math.floor(Math.random()*3)] });
   }
+  else if (state === 'dead') { initGame(); state = 'playing'; rocket.vy = FLAP; sfxFlap(); startMusic(); }
+}
+document.addEventListener('keydown', e => { if (e.code==='Space'||e.code==='ArrowUp') { e.preventDefault(); flap(); } });
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); flap(); });
 
+// ─── SPAWN ────────────────────────────────────────────────
+function spawnCandle() {
+  const ph = getPhase();
+  const minY = 70, maxY = H - GROUND_H - 120 - ph.gap;
+  const topH = Math.random()*(maxY-minY)+minY;
+  const isGreen = Math.random() > ph.redChance;
+  candles.push({ x: W+10, topH, gap: ph.gap, isGreen, topBodyH: topH*0.75, botBodyH: (H-GROUND_H-topH-ph.gap)*0.75, scored: false });
+  coins.push({ x: W+10+CANDLE_W/2, y: topH+ph.gap/2, collected: false, anim: Math.random()*Math.PI*2 });
+}
+
+// ─── DRAW ROCKET ──────────────────────────────────────────
+function drawRocket() {
+  const r = rocket;
+  ctx.save();
+  ctx.translate(r.x+r.w/2, r.y+r.h/2);
+  ctx.rotate(r.rot*Math.PI/180);
+  const flameLen = 12+Math.sin(r.frameTimer*0.4)*5;
+  const fg = ctx.createLinearGradient(-r.w/2-flameLen,0,-r.w/2,0);
+  fg.addColorStop(0,'rgba(255,80,0,0)'); fg.addColorStop(0.5,'rgba(255,160,0,0.9)'); fg.addColorStop(1,'rgba(255,220,0,1)');
+  ctx.fillStyle=fg;
+  ctx.beginPath(); ctx.moveTo(-r.w/2,-5); ctx.lineTo(-r.w/2-flameLen,0); ctx.lineTo(-r.w/2,5); ctx.closePath(); ctx.fill();
+  const bg=ctx.createLinearGradient(0,-r.h/2,0,r.h/2);
+  bg.addColorStop(0,'#e8e8f0'); bg.addColorStop(1,'#a0a0c0');
+  ctx.fillStyle=bg; ctx.beginPath(); ctx.ellipse(0,0,r.w/2,r.h/2,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#f5c842';
+  ctx.beginPath(); ctx.moveTo(r.w/2,0); ctx.lineTo(r.w/2-14,-r.h/2+2); ctx.lineTo(r.w/2-14,r.h/2-2); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-r.w/2+4,r.h/2-2); ctx.lineTo(-r.w/2-6,r.h/2+10); ctx.lineTo(-r.w/2+14,r.h/2-2); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-r.w/2+4,-r.h/2+2); ctx.lineTo(-r.w/2-6,-r.h/2-10); ctx.lineTo(-r.w/2+14,-r.h/2+2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#f7931a'; ctx.beginPath(); ctx.arc(4,0,11,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 13px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('₿',4,1);
+  ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.ellipse(5,-6,r.w/2-10,r.h/2-8,-0.3,0,Math.PI); ctx.fill();
   ctx.restore();
 }
 
+// ─── DRAW CANDLE ──────────────────────────────────────────
+function drawCandle(c) {
+  const wickW=6, bodyX=c.x, wickX=c.x+CANDLE_W/2-wickW/2, rimExtra=5;
+  const green=c.isGreen;
+  const bodyColor=green?'#00c853':'#d50000', darkColor=green?'#007722':'#8b0000';
+  const rimColor=green?'#00e676':'#ff5252', wickColor=green?'#00a040':'#aa0000';
+  ctx.fillStyle=wickColor; ctx.fillRect(wickX,0,wickW,c.topH-c.topBodyH);
+  ctx.fillStyle=bodyColor; ctx.fillRect(bodyX,c.topH-c.topBodyH,CANDLE_W,c.topBodyH);
+  ctx.fillStyle=darkColor; ctx.fillRect(bodyX+CANDLE_W-12,c.topH-c.topBodyH,12,c.topBodyH);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(bodyX+4,c.topH-c.topBodyH,8,c.topBodyH);
+  ctx.fillStyle=rimColor; ctx.fillRect(bodyX-rimExtra,c.topH-18,CANDLE_W+rimExtra*2,18);
+  const botY=c.topH+c.gap;
+  ctx.fillStyle=rimColor; ctx.fillRect(bodyX-rimExtra,botY,CANDLE_W+rimExtra*2,18);
+  const botBodyStart=botY+18;
+  ctx.fillStyle=bodyColor; ctx.fillRect(bodyX,botBodyStart,CANDLE_W,c.botBodyH);
+  ctx.fillStyle=darkColor; ctx.fillRect(bodyX+CANDLE_W-12,botBodyStart,12,c.botBodyH);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fillRect(bodyX+4,botBodyStart,8,c.botBodyH);
+  const wickBot=botBodyStart+c.botBodyH;
+  ctx.fillStyle=wickColor; ctx.fillRect(wickX,wickBot,wickW,H-GROUND_H-wickBot);
+}
+
+// ─── DRAW COIN ────────────────────────────────────────────
+function drawCoin(coin) {
+  if (coin.collected) return;
+  const bob=Math.sin(coin.anim)*4;
+  ctx.save(); ctx.translate(coin.x,coin.y+bob);
+  ctx.shadowColor='#f7931a'; ctx.shadowBlur=12;
+  ctx.fillStyle='#f7931a'; ctx.beginPath(); ctx.arc(0,0,10,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0; ctx.fillStyle='#fff'; ctx.font='bold 10px Arial';
+  ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('₿',0,1);
+  ctx.restore();
+}
+
+// ─── DRAW GROUND ──────────────────────────────────────────
+function drawGround() {
+  const grad=ctx.createLinearGradient(0,H-GROUND_H,0,H);
+  grad.addColorStop(0,'#1a1a3e'); grad.addColorStop(1,'#0a0a1a');
+  ctx.fillStyle=grad; ctx.fillRect(0,H-GROUND_H,W,GROUND_H);
+  ctx.strokeStyle='#4040ff'; ctx.lineWidth=2;
+  ctx.shadowColor='#4040ff'; ctx.shadowBlur=8;
+  ctx.beginPath(); ctx.moveTo(0,H-GROUND_H); ctx.lineTo(W,H-GROUND_H); ctx.stroke();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(64,64,255,0.2)'; ctx.lineWidth=1;
+  for (let i=0;i<W;i+=30) { ctx.beginPath(); ctx.moveTo(i,H-GROUND_H); ctx.lineTo(i,H); ctx.stroke(); }
+}
+
+// ─── DRAW BACKGROUND ─────────────────────────────────────
+function drawBackground() {
+  const ph=getPhase();
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, market==='bull' ? '#000820' : '#1a0008');
+  grad.addColorStop(0.5, market==='bull' ? '#0a0020' : '#0d0015');
+  grad.addColorStop(1, market==='bull' ? '#1a0030' : '#200010');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,W,H);
+  for (const s of stars) {
+    s.twinkle+=0.02;
+    ctx.globalAlpha=s.a*(0.6+Math.sin(s.twinkle)*0.4);
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+  ctx.fillStyle='rgba(255,255,220,0.9)'; ctx.shadowColor='rgba(255,255,180,0.5)'; ctx.shadowBlur=20;
+  ctx.beginPath(); ctx.arc(W-60,70,32,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0; ctx.fillStyle='rgba(200,200,150,0.4)';
+  ctx.beginPath(); ctx.arc(W-52,60,6,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W-70,75,4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W-55,82,3,0,Math.PI*2); ctx.fill();
+  drawBgChart();
+  ctx.font='11px monospace';
+  ctx.fillStyle=market==='bull'?'rgba(0,200,100,0.4)':'rgba(200,50,50,0.4)';
+  const tickerText='  BTC +12.4%   ETH +8.2%   SOL +22.1%   DOGE +5.3%   BNB +3.8%   ';
+  const tw=ctx.measureText(tickerText).width;
+  const tickX=((frame*0.8)%tw);
+  ctx.fillText(tickerText+tickerText,-tickX,H-GROUND_H-8);
+}
+
+function drawBgChart() {
+  const cw=11,gap=4,step=cw+gap,chartH=200,chartY=90,total=BG_CANDLES.length;
+  let minP=Infinity,maxP=-Infinity;
+  for (const c of BG_CANDLES) { minP=Math.min(minP,c.low); maxP=Math.max(maxP,c.high); }
+  const range=maxP-minP||1;
+  const toY=p=>chartY+chartH-((p-minP)/range)*chartH;
+  const scrollOffset=(frame*0.3)%step;
+  ctx.save(); ctx.globalAlpha=0.18;
+  for (let i=0;i<total+2;i++) {
+    const c=BG_CANDLES[i%total], x=i*step-scrollOffset;
+    if (x+cw<0||x>W) continue;
+    const isG=c.close>=c.open;
+    const bTop=toY(Math.max(c.open,c.close)), bBot=toY(Math.min(c.open,c.close));
+    ctx.strokeStyle=isG?'#00e676':'#ff5252'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x+cw/2,toY(c.high)); ctx.lineTo(x+cw/2,toY(c.low)); ctx.stroke();
+    ctx.fillStyle=isG?'#00c853':'#d50000'; ctx.fillRect(x,bTop,cw,Math.max(2,bBot-bTop));
+  }
+  ctx.restore();
+}
+
+// ─── COLLISION ────────────────────────────────────────────
 function checkCollision() {
-  const bx = rocket.x + 6, by = rocket.y + 5;
-  const bw = rocket.w - 14, bh = rocket.h - 10;
-  if (rocket.y + rocket.h > H - GROUND_H || rocket.y < 0) return true;
+  const bx=rocket.x+6,by=rocket.y+5,bw=rocket.w-14,bh=rocket.h-10;
+  if (rocket.y+rocket.h>H-GROUND_H||rocket.y<0) return true;
   for (const c of candles) {
-    const rimExtra = 5;
-    if (bx < c.x + CANDLE_W + rimExtra && bx + bw > c.x - rimExtra) {
-      if (by < c.topH) return true;
-      if (by + bh > c.topH + GAP) return true;
+    if (bx<c.x+CANDLE_W+5&&bx+bw>c.x-5) {
+      if (by<c.topH) return true;
+      if (by+bh>c.topH+c.gap) return true;
     }
   }
   return false;
@@ -422,236 +343,255 @@ function checkCollision() {
 function checkCoinCollect() {
   for (const coin of coins) {
     if (coin.collected) continue;
-    const dx = rocket.x + rocket.w/2 - coin.x;
-    const dy = rocket.y + rocket.h/2 - coin.y;
-    if (Math.sqrt(dx*dx + dy*dy) < 20) {
-      coin.collected = true;
-      score++;
-      if (score > bestScore) bestScore = score;
-      // Coin collect particles
-      for (let i = 0; i < 8; i++) {
-        const angle = (i/8)*Math.PI*2;
-        particles.push({
-          x: coin.x, y: coin.y,
-          vx: Math.cos(angle)*3, vy: Math.sin(angle)*3,
-          life: 20, maxLife: 20, r: 3,
-          color: '#f7931a'
-        });
+    const dx=rocket.x+rocket.w/2-coin.x, dy=rocket.y+rocket.h/2-coin.y;
+    if (Math.sqrt(dx*dx+dy*dy)<20) {
+      coin.collected=true; score++;
+      if (score>bestScore) bestScore=score;
+      sfxCoin();
+      for (let i=0;i<8;i++) {
+        const angle=(i/8)*Math.PI*2;
+        particles.push({ x:coin.x, y:coin.y, vx:Math.cos(angle)*3, vy:Math.sin(angle)*3, life:20, maxLife:20, r:3, color:'#f7931a' });
       }
     }
   }
 }
 
 function spawnScoreParticles() {
-  for (let i = 0; i < 14; i++) {
-    const angle = (i/14)*Math.PI*2;
-    particles.push({
-      x: W/2, y: 80,
-      vx: Math.cos(angle)*(Math.random()*4+2),
-      vy: Math.sin(angle)*(Math.random()*4+2),
-      life: 30, maxLife: 30,
-      r: Math.random()*5+3,
-      color: ['#f7931a','#ffcc00','#00c853','#fff'][Math.floor(Math.random()*4)]
+  for (let i=0;i<14;i++) {
+    const angle=(i/14)*Math.PI*2;
+    particles.push({ x:W/2,y:80, vx:Math.cos(angle)*(Math.random()*4+2), vy:Math.sin(angle)*(Math.random()*4+2), life:30, maxLife:30, r:Math.random()*5+3, color:['#f7931a','#ffcc00','#00c853','#fff'][Math.floor(Math.random()*4)] });
+  }
+  flashTimer=8;
+}
+
+// ─── DRAW SCORE ───────────────────────────────────────────
+function drawScore() {
+  ctx.textAlign='center';
+  ctx.font='bold 52px Arial';
+  ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillText(score,W/2+3,93);
+  ctx.strokeStyle='#f7931a'; ctx.lineWidth=4;
+  ctx.strokeText(score,W/2,90);
+  ctx.fillStyle='#fff'; ctx.fillText(score,W/2,90);
+  // Market phase badge
+  const ph=getPhase();
+  ctx.font='bold 13px Arial';
+  ctx.fillStyle=market==='bull'?'rgba(0,200,80,0.85)':'rgba(220,50,50,0.85)';
+  ctx.fillRect(W/2-38,100,76,20);
+  ctx.fillStyle='#fff'; ctx.fillText(market==='bull'?'🐂 BULL RUN':'🐻 BEAR MARKET',W/2,114);
+}
+
+// ─── MARKET ANNOUNCE ─────────────────────────────────────
+function drawMarketAnnounce() {
+  if (!marketAnnounce) return;
+  const a=marketAnnounce;
+  const progress=a.life/a.maxLife;
+  const scale2=progress<0.2?(1+(1-progress/0.2)*0.5):(progress>0.8?(1-(progress-0.8)/0.2*0.3):1);
+  ctx.save();
+  ctx.globalAlpha=Math.min(1,progress*5)*Math.min(1,(1-progress)*5);
+  ctx.translate(W/2,H/2);
+  ctx.scale(scale2,scale2);
+  // Big glow bg
+  ctx.fillStyle=a.isBull?'rgba(0,180,60,0.25)':'rgba(200,0,0,0.25)';
+  ctx.beginPath(); ctx.roundRect(-145,-45,290,90,18); ctx.fill();
+  ctx.strokeStyle=a.isBull?'#00e676':'#ff5252'; ctx.lineWidth=2.5; ctx.stroke();
+  ctx.textAlign='center';
+  ctx.font='bold 32px Arial';
+  ctx.strokeStyle=a.isBull?'#004d1a':'#7a0000'; ctx.lineWidth=4;
+  ctx.strokeText(a.label,0,0);
+  ctx.fillStyle=a.isBull?'#00ff88':'#ff4444'; ctx.fillText(a.label,0,0);
+  ctx.font='bold 16px Arial';
+  ctx.fillStyle='rgba(255,255,255,0.85)';
+  ctx.fillText(a.isBull?'Wider gaps • Faster speed!':'Tighter gaps • More red candles!',0,28);
+  ctx.restore();
+}
+
+// ─── MILESTONE ANNOUNCE ───────────────────────────────────
+function drawMilestoneAnnounce() {
+  if (!milestoneAnnounce) return;
+  const a=milestoneAnnounce;
+  const progress=a.life/a.maxLife;
+  const scale2=progress<0.15?(1+(1-progress/0.15)*0.8):(progress>0.75?(1-(progress-0.75)/0.25*0.2):1);
+  ctx.save();
+  ctx.globalAlpha=Math.min(1,progress*4)*Math.min(1,(1-progress)*5);
+  ctx.translate(W/2,H*0.35);
+  ctx.scale(scale2,scale2);
+  // Firework burst
+  for (let i=0;i<12;i++) {
+    const angle=(i/12)*Math.PI*2;
+    const len=55*(1-progress*0.4);
+    ctx.strokeStyle=['#f7931a','#ffcc00','#00c853','#fff','#ff6b6b'][i%5];
+    ctx.lineWidth=2.5; ctx.globalAlpha*=0.7;
+    ctx.beginPath(); ctx.moveTo(Math.cos(angle)*20,Math.sin(angle)*20);
+    ctx.lineTo(Math.cos(angle)*len,Math.sin(angle)*len); ctx.stroke();
+    ctx.globalAlpha/=0.7;
+  }
+  ctx.fillStyle='rgba(0,0,0,0.55)';
+  ctx.beginPath(); ctx.roundRect(-120,-38,240,76,16); ctx.fill();
+  ctx.strokeStyle='#f7931a'; ctx.lineWidth=2; ctx.stroke();
+  ctx.textAlign='center';
+  ctx.font='bold 26px Arial';
+  ctx.strokeStyle='#7a3000'; ctx.lineWidth=4; ctx.strokeText('🎉 TO THE MOON! 🎉',0,-6);
+  ctx.fillStyle='#f7931a'; ctx.fillText('🎉 TO THE MOON! 🎉',0,-6);
+  ctx.font='bold 16px Arial';
+  ctx.fillStyle='#fff'; ctx.fillText(`Score ${a.score} reached! Keep flying!`,0,22);
+  ctx.restore();
+}
+
+// ─── IDLE SCREEN ──────────────────────────────────────────
+function drawIdleScreen() {
+  ctx.fillStyle='rgba(0,0,10,0.6)';
+  ctx.beginPath(); ctx.roundRect(W/2-155,H/2-160,310,290,20); ctx.fill();
+  ctx.strokeStyle='rgba(247,147,26,0.5)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.textAlign='center';
+  ctx.font='bold 46px Arial';
+  ctx.strokeStyle='#7a3000'; ctx.lineWidth=5; ctx.strokeText('TO THE MOON!',W/2,H/2-95);
+  ctx.fillStyle='#f7931a'; ctx.fillText('TO THE MOON!',W/2,H/2-95);
+  ctx.font='32px Arial'; ctx.fillText('🚀  ₿  🌙',W/2,H/2-48);
+  ctx.font='bold 14px Arial'; ctx.fillStyle='rgba(255,200,100,0.8)';
+  ctx.fillText('Dodge candles. Ride the bull run.',W/2,H/2-8);
+  const pulse=0.6+Math.sin(frame*0.08)*0.4;
+  ctx.globalAlpha=pulse;
+  ctx.font='bold 24px Arial'; ctx.fillStyle='#fff'; ctx.strokeStyle='#333'; ctx.lineWidth=3;
+  ctx.strokeText('TAP TO LAUNCH 🚀',W/2,H/2+38); ctx.fillText('TAP TO LAUNCH 🚀',W/2,H/2+38);
+  ctx.globalAlpha=1;
+  if (bestScore>0) {
+    ctx.font='bold 18px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
+    ctx.strokeText(`Best: ${bestScore}`,W/2,H/2+72); ctx.fillText(`Best: ${bestScore}`,W/2,H/2+72);
+  }
+  // Hall of fame preview
+  if (hallOfFame.length>0) {
+    ctx.font='bold 13px Arial'; ctx.fillStyle='rgba(255,200,80,0.7)';
+    ctx.fillText('🏆 '+hallOfFame.slice(0,3).map((s,i)=>['🥇','🥈','🥉'][i]+' '+s).join('  '),W/2,H/2+105);
+  }
+}
+
+// ─── DEAD SCREEN ──────────────────────────────────────────
+function drawDeadScreen() {
+  ctx.fillStyle='rgba(0,0,10,0.75)';
+  ctx.beginPath(); ctx.roundRect(W/2-145,H/2-150,290,300,20); ctx.fill();
+  ctx.strokeStyle='rgba(213,0,0,0.6)'; ctx.lineWidth=2; ctx.stroke();
+  ctx.textAlign='center';
+  ctx.font='bold 40px Arial'; ctx.strokeStyle='#7a0000'; ctx.lineWidth=4;
+  ctx.strokeText('RUGGED! 💀',W/2,H/2-98); ctx.fillStyle='#ff4444'; ctx.fillText('RUGGED! 💀',W/2,H/2-98);
+  ctx.font='bold 22px Arial'; ctx.fillStyle='#fff'; ctx.strokeStyle='#333'; ctx.lineWidth=2;
+  ctx.strokeText(`Score: ${score}`,W/2,H/2-55); ctx.fillText(`Score: ${score}`,W/2,H/2-55);
+  ctx.font='bold 18px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
+  ctx.strokeText(`Best: ${bestScore}`,W/2,H/2-22); ctx.fillText(`Best: ${bestScore}`,W/2,H/2-22);
+  const msgs=['Market crashed 📉','Candle got you 🕯️','HODL next time 💎','Bear market wins 🐻','Paper hands 📄'];
+  ctx.font='italic 14px Arial'; ctx.fillStyle='rgba(255,150,100,0.8)';
+  ctx.fillText(msgs[score%msgs.length],W/2,H/2+5);
+  // Hall of fame
+  ctx.font='bold 14px Arial'; ctx.fillStyle='rgba(255,200,80,0.9)';
+  ctx.fillText('🏆 Hall of Fame',W/2,H/2+35);
+  if (hallOfFame.length===0) {
+    ctx.font='13px Arial'; ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.fillText('No scores yet!',W/2,H/2+58);
+  } else {
+    hallOfFame.slice(0,5).forEach((s,i) => {
+      const medals=['🥇','🥈','🥉','4️⃣','5️⃣'];
+      ctx.font=i===0?'bold 15px Arial':'13px Arial';
+      ctx.fillStyle=i===0?'#f7931a':i===1?'#c0c0c0':i===2?'#cd7f32':'rgba(255,255,255,0.6)';
+      ctx.fillText(`${medals[i]} ${s}`,W/2,H/2+58+i*20);
     });
   }
-  flashTimer = 8;
+  const pulse=0.6+Math.sin(frame*0.1)*0.4;
+  ctx.globalAlpha=pulse;
+  ctx.font='bold 20px Arial'; ctx.fillStyle='#fff'; ctx.strokeStyle='#555'; ctx.lineWidth=2;
+  ctx.strokeText('TAP TO RETRY',W/2,H/2+165); ctx.fillText('TAP TO RETRY',W/2,H/2+165);
+  ctx.globalAlpha=1;
 }
 
-function drawScore() {
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 52px Arial';
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillText(score, W/2+3, 93);
-  ctx.strokeStyle = '#f7931a';
-  ctx.lineWidth = 4;
-  ctx.strokeText(score, W/2, 90);
-  ctx.fillStyle = '#fff';
-  ctx.fillText(score, W/2, 90);
-}
-
-function drawIdleScreen() {
-  // Dark panel
-  ctx.fillStyle = 'rgba(0,0,10,0.6)';
-  ctx.beginPath();
-  ctx.roundRect(W/2 - 155, H/2 - 150, 310, 260, 20);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(247,147,26,0.5)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.textAlign = 'center';
-
-  // Title
-  ctx.font = 'bold 46px Arial';
-  ctx.strokeStyle = '#7a3000';
-  ctx.lineWidth = 5;
-  ctx.strokeText('TO THE MOON!', W/2, H/2 - 80);
-  ctx.fillStyle = '#f7931a';
-  ctx.fillText('TO THE MOON!', W/2, H/2 - 80);
-
-  // Rocket emoji line
-  ctx.font = '32px Arial';
-  ctx.fillText('🚀  ₿  🌙', W/2, H/2 - 35);
-
-  // Subtitle
-  ctx.font = 'bold 15px Arial';
-  ctx.fillStyle = 'rgba(255,200,100,0.8)';
-  ctx.fillText('Dodge red candles. Ride the bull run.', W/2, H/2 + 5);
-
-  // Tap prompt
-  const pulse = 0.6 + Math.sin(frame * 0.08) * 0.4;
-  ctx.globalAlpha = pulse;
-  ctx.font = 'bold 26px Arial';
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 3;
-  ctx.strokeText('TAP TO LAUNCH 🚀', W/2, H/2 + 55);
-  ctx.fillText('TAP TO LAUNCH 🚀', W/2, H/2 + 55);
-  ctx.globalAlpha = 1;
-
-  if (bestScore > 0) {
-    ctx.font = 'bold 20px Arial';
-    ctx.fillStyle = '#f7931a';
-    ctx.strokeStyle = '#7a3000';
-    ctx.lineWidth = 2;
-    ctx.strokeText(`Best: ${bestScore}`, W/2, H/2 + 90);
-    ctx.fillText(`Best: ${bestScore}`, W/2, H/2 + 90);
-  }
-}
-
-function drawDeadScreen() {
-  ctx.fillStyle = 'rgba(0,0,10,0.7)';
-  ctx.beginPath();
-  ctx.roundRect(W/2 - 140, H/2 - 130, 280, 240, 20);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(213,0,0,0.6)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.textAlign = 'center';
-
-  ctx.font = 'bold 40px Arial';
-  ctx.strokeStyle = '#7a0000';
-  ctx.lineWidth = 4;
-  ctx.strokeText('RUGGED! 💀', W/2, H/2 - 70);
-  ctx.fillStyle = '#ff4444';
-  ctx.fillText('RUGGED! 💀', W/2, H/2 - 70);
-
-  ctx.font = 'bold 22px Arial';
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 2;
-  ctx.strokeText(`Score: ${score}`, W/2, H/2 - 22);
-  ctx.fillText(`Score: ${score}`, W/2, H/2 - 22);
-
-  ctx.font = 'bold 20px Arial';
-  ctx.fillStyle = '#f7931a';
-  ctx.strokeStyle = '#7a3000';
-  ctx.lineWidth = 2;
-  ctx.strokeText(`Best: ${bestScore}`, W/2, H/2 + 18);
-  ctx.fillText(`Best: ${bestScore}`, W/2, H/2 + 18);
-
-  // Market message
-  const msgs = ['Market crashed 📉', 'Candle got you 🕯️', 'HODL next time 💎', 'Bear market wins 🐻'];
-  ctx.font = 'italic 15px Arial';
-  ctx.fillStyle = 'rgba(255,150,100,0.8)';
-  ctx.fillText(msgs[score % msgs.length], W/2, H/2 + 50);
-
-  const pulse = 0.6 + Math.sin(frame * 0.1) * 0.4;
-  ctx.globalAlpha = pulse;
-  ctx.font = 'bold 22px Arial';
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = '#555';
-  ctx.lineWidth = 2;
-  ctx.strokeText('TAP TO RETRY', W/2, H/2 + 90);
-  ctx.fillText('TAP TO RETRY', W/2, H/2 + 90);
-  ctx.globalAlpha = 1;
-}
-
+// ─── UPDATE ───────────────────────────────────────────────
 function update() {
   frame++;
+  if (marketAnnounce) { marketAnnounce.life--; if (marketAnnounce.life<=0) marketAnnounce=null; }
+  if (milestoneAnnounce) { milestoneAnnounce.life--; if (milestoneAnnounce.life<=0) milestoneAnnounce=null; }
 
-  if (state === 'playing') {
-    rocket.vy += GRAVITY;
-    rocket.y += rocket.vy;
-    rocket.frameTimer++;
-    rocket.rot = Math.max(-30, Math.min(85, rocket.vy * 4));
+  if (state==='playing') {
+    const ph=getPhase();
+    rocket.vy+=GRAVITY; rocket.y+=rocket.vy;
+    rocket.frameTimer++; rocket.rot=Math.max(-30,Math.min(85,rocket.vy*4));
 
-    if (frame % CANDLE_INTERVAL === 0) spawnCandle();
+    // Market phase switch every 15 candles scored
+    marketTimer++;
+    if (marketTimer>=15&&score>0) {
+      marketTimer=0;
+      const newMarket=market==='bull'?'bear':'bull';
+      market=newMarket;
+      const isBull=newMarket==='bull';
+      marketAnnounce={ label:PHASES[newMarket].label, isBull, life:120, maxLife:120 };
+      sfxMarketChange(isBull);
+    }
+
+    if (frame%ph.interval===0) spawnCandle();
 
     for (const c of candles) {
-      c.x -= SPEED;
-      if (!c.scored && c.x + CANDLE_W < rocket.x) {
-        c.scored = true;
-        score++;
-        if (score > bestScore) bestScore = score;
-        spawnScoreParticles();
+      c.x-=ph.speed;
+      if (!c.scored&&c.x+CANDLE_W<rocket.x) {
+        c.scored=true; score++;
+        if (score>bestScore) bestScore=score;
+        spawnScoreParticles(); sfxScore();
+        // Milestone every 25
+        if (score%25===0) {
+          milestoneAnnounce={ score, life:150, maxLife:150 };
+          sfxMilestone();
+          for (let i=0;i<30;i++) {
+            const angle=Math.random()*Math.PI*2;
+            particles.push({ x:Math.random()*W, y:Math.random()*(H/2), vx:Math.cos(angle)*(Math.random()*3+1), vy:Math.sin(angle)*(Math.random()*3+1)+1, life:50, maxLife:50, r:Math.random()*6+3, color:['#f7931a','#ffcc00','#00c853','#fff','#ff6b6b'][Math.floor(Math.random()*5)] });
+          }
+        }
       }
     }
-    candles = candles.filter(c => c.x + CANDLE_W + 20 > 0);
-
-    for (const coin of coins) {
-      coin.x -= SPEED;
-      coin.anim += 0.06;
-    }
-    coins = coins.filter(c => c.x > -20);
-
+    candles=candles.filter(c=>c.x+CANDLE_W+20>0);
+    for (const coin of coins) { coin.x-=ph.speed; coin.anim+=0.06; }
+    coins=coins.filter(c=>c.x>-20);
     checkCoinCollect();
 
     if (checkCollision()) {
-      state = 'dead';
-      rocket.alive = false;
-      for (let i = 0; i < 22; i++) {
+      state='dead'; rocket.alive=false;
+      sfxDeath(); stopMusic();
+      addToHallOfFame(score);
+      // Epic death explosion
+      for (let i=0;i<40;i++) {
         particles.push({
-          x: rocket.x + rocket.w/2, y: rocket.y + rocket.h/2,
-          vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10-3,
-          life: 45, maxLife: 45,
-          r: Math.random()*7+3,
-          color: ['#f7931a','#ff4500','#ffcc00','#fff'][Math.floor(Math.random()*4)]
+          x:rocket.x+rocket.w/2, y:rocket.y+rocket.h/2,
+          vx:(Math.random()-0.5)*14, vy:(Math.random()-0.5)*14-4,
+          life:55+Math.random()*20, maxLife:75,
+          r:Math.random()*9+3,
+          color:['#f7931a','#ff4500','#ffcc00','#fff','#ff0000','#ff6600'][Math.floor(Math.random()*6)]
         });
+      }
+      // Shockwave ring particle
+      for (let i=0;i<20;i++) {
+        const angle=(i/20)*Math.PI*2;
+        particles.push({ x:rocket.x+rocket.w/2, y:rocket.y+rocket.h/2, vx:Math.cos(angle)*8, vy:Math.sin(angle)*8, life:20, maxLife:20, r:4, color:'rgba(255,200,100,0.8)' });
       }
     }
   }
 
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy;
-    p.vy += 0.15; p.life--;
-  }
-  particles = particles.filter(p => p.life > 0);
-  if (flashTimer > 0) flashTimer--;
+  for (const p of particles) { p.x+=p.vx; p.y+=p.vy; p.vy+=0.15; p.life--; }
+  particles=particles.filter(p=>p.life>0);
+  if (flashTimer>0) flashTimer--;
 }
 
+// ─── DRAW ─────────────────────────────────────────────────
 function draw() {
   drawBackground();
-
-  if (flashTimer > 0) {
-    ctx.fillStyle = `rgba(255,200,50,${flashTimer/8*0.2})`;
-    ctx.fillRect(0, 0, W, H);
-  }
-
+  if (flashTimer>0) { ctx.fillStyle=`rgba(255,200,50,${flashTimer/8*0.2})`; ctx.fillRect(0,0,W,H); }
   for (const c of candles) drawCandle(c);
   for (const coin of coins) drawCoin(coin);
-
   drawGround();
-
   for (const p of particles) {
-    ctx.globalAlpha = p.life / p.maxLife;
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
-    ctx.fill();
+    ctx.globalAlpha=p.life/p.maxLife;
+    ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
   }
-  ctx.globalAlpha = 1;
-
-  drawRocket();
-
-  if (state === 'playing') drawScore();
-  if (state === 'idle') drawIdleScreen();
-  if (state === 'dead') drawDeadScreen();
+  ctx.globalAlpha=1;
+  if (rocket.alive||state==='dead') drawRocket();
+  if (state==='playing') { drawScore(); drawMarketAnnounce(); drawMilestoneAnnounce(); }
+  if (state==='idle') drawIdleScreen();
+  if (state==='dead') drawDeadScreen();
 }
 
 function loop() { update(); draw(); requestAnimationFrame(loop); }
-
 initGame();
 loop();
 </script>
