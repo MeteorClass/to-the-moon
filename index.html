@@ -507,6 +507,8 @@ function drawIdle(){
     ctx.font='bold 20px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
     ctx.strokeText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+68); ctx.fillText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+68);
   }
+  ctx.font='9px Arial'; ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.textAlign='center';
+  ctx.fillText('Not affiliated with any cryptocurrency project. For entertainment only.',W/2,H/2+105);
 }
 
 // ── DEAD SCREEN ──────────────────────────────────────────
