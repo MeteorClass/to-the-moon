@@ -492,26 +492,20 @@ function drawMilestone(){
 // ── IDLE SCREEN ──────────────────────────────────────────
 function drawIdle(){
   ctx.fillStyle='rgba(0,0,10,0.62)';
-  ctx.beginPath(); ctx.roundRect(W/2-155,H/2-165,310,310,20); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(W/2-155,H/2-140,310,250,20); ctx.fill();
   ctx.strokeStyle='rgba(247,147,26,0.5)'; ctx.lineWidth=2; ctx.stroke();
   ctx.textAlign='center';
   ctx.font='bold 44px Arial'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=5;
-  ctx.strokeText('TO THE MOON!',W/2,H/2-103); ctx.fillStyle='#f7931a'; ctx.fillText('TO THE MOON!',W/2,H/2-103);
-  ctx.font='30px Arial'; ctx.fillText('🚀  ₿  🌙',W/2,H/2-58);
-  ctx.font='bold 13px Arial'; ctx.fillStyle='rgba(255,200,100,0.8)';
-  ctx.fillText('Normal → Bull Run → Normal → Bear Market',W/2,H/2-22);
+  ctx.strokeText('TO THE MOON!',W/2,H/2-85); ctx.fillStyle='#f7931a'; ctx.fillText('TO THE MOON!',W/2,H/2-85);
+  ctx.font='30px Arial'; ctx.fillText('🚀  ₿  🌙',W/2,H/2-38);
   const pulse=0.6+Math.sin(frame*0.08)*0.4;
   ctx.globalAlpha=pulse;
   ctx.font='bold 24px Arial'; ctx.fillStyle='#fff'; ctx.strokeStyle='#333'; ctx.lineWidth=3;
-  ctx.strokeText('TAP TO LAUNCH 🚀',W/2,H/2+22); ctx.fillText('TAP TO LAUNCH 🚀',W/2,H/2+22);
+  ctx.strokeText('TAP TO LAUNCH 🚀',W/2,H/2+18); ctx.fillText('TAP TO LAUNCH 🚀',W/2,H/2+18);
   ctx.globalAlpha=1;
   if(bestScore>0){
-    ctx.font='bold 17px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
-    ctx.strokeText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+60); ctx.fillText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+60);
-  }
-  if(hof.length>0){
-    ctx.font='bold 12px Arial'; ctx.fillStyle='rgba(255,200,80,0.75)';
-    ctx.fillText('🏆 '+hof.slice(0,3).map((s,i)=>['🥇','🥈','🥉'][i]+' '+s).join('  '),W/2,H/2+92);
+    ctx.font='bold 20px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
+    ctx.strokeText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+68); ctx.fillText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+68);
   }
 }
 
