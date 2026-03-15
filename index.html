@@ -131,12 +131,6 @@ for(let i=0;i<80;i++) stars.push({x:Math.random()*W,y:Math.random()*(H-GROUND_H)
 const NODES=[];
 for(let i=0;i<14;i++) NODES.push({x:Math.random()*W,y:Math.random()*(H-GROUND_H-60)+30,vx:(Math.random()-0.5)*0.18,vy:(Math.random()-0.5)*0.18,r:Math.random()*2.5+1.5});
 
-// Matrix falling columns
-const MATRIX_COLS = Math.floor(W / 14);
-const matrixDrops = [];
-for(let i=0;i<MATRIX_COLS;i++) matrixDrops.push(Math.random()*H/-14);
-const MATRIX_CHARS='0123456789₿Ξ◎01';
-
 // Floating crypto logos
 const LOGOS=[];
 const LOGO_SYMS=['₿','Ξ','◎','Ð','⬡'];
@@ -279,33 +273,6 @@ function drawGround(){
 }
 
 // ── DRAW BACKGROUND ──────────────────────────────────────
-function drawMatrix(){
-  ctx.save();
-  ctx.font='bold 11px monospace';
-  ctx.textAlign='center';
-  const ph=curPhase();
-  const colGreen = ph==='bear'?'rgba(200,0,0,':'rgba(0,200,80,';
-  for(let i=0;i<MATRIX_COLS;i++){
-    const ch=MATRIX_CHARS[Math.floor(Math.random()*MATRIX_CHARS.length)];
-    const x=i*14+7;
-    const y=matrixDrops[i]*14;
-    // Bright head
-    ctx.globalAlpha=0.55;
-    ctx.fillStyle=ph==='bear'?'#ff6666':'#88ffaa';
-    ctx.fillText(ch,x,y);
-    // Fading trail (3 chars behind)
-    for(let t=1;t<=4;t++){
-      ctx.globalAlpha=(0.18-(t*0.04));
-      ctx.fillStyle=ph==='bear'?`rgba(200,0,0,1)`:`rgba(0,200,80,1)`;
-      const tc=MATRIX_CHARS[Math.floor(Math.random()*MATRIX_CHARS.length)];
-      ctx.fillText(tc,x,y-t*14);
-    }
-    matrixDrops[i]+=0.18;
-    if(matrixDrops[i]*14>H-GROUND_H&&Math.random()>0.97) matrixDrops[i]=0;
-  }
-  ctx.restore();
-}
-
 function drawNodes(){
   ctx.save();
   // Update + draw nodes
@@ -373,16 +340,25 @@ function drawBackground(){
   ctx.beginPath(); ctx.arc(W-60,70,32,0,Math.PI*2); ctx.fill();
   ctx.shadowBlur=0; ctx.fillStyle='rgba(200,200,150,0.4)';
   [[W-52,60,6],[W-70,75,4],[W-55,82,3]].forEach(([x,y,r])=>{ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); });
-  drawMatrix();
   drawNodes();
   drawFloatingLogos();
   drawBgChart(cfg);
   const ph=curPhase();
+  const tickCol=ph==='bull'?'rgba(0,220,100,':ph==='bear'?'rgba(220,50,50,':'rgba(0,200,80,';
+  const tickers=[
+    { txt:'  BTC +12.4%   ETH +8.2%   SOL +22.1%   DOGE +5.3%   BNB +3.8%   ', speed:0.8,  y:H-GROUND_H-8,  alpha:0.45 },
+    { txt:'  ADA +6.1%   AVAX +18.3%   MATIC +9.7%   DOT +4.2%   LINK +11.5%   ', speed:0.55, y:H-GROUND_H-22, alpha:0.32 },
+    { txt:'  XRP +3.9%   LTC +7.6%   ATOM +14.2%   NEAR +21.8%   FTM +33.1%   ', speed:0.7,  y:H-GROUND_H-36, alpha:0.25 },
+    { txt:'  SHIB +44.2%   PEPE +61.7%   WIF +88.3%   BONK +55.1%   FLOKI +29.4%   ', speed:0.45, y:H-GROUND_H-50, alpha:0.18 },
+    { txt:'  ARB +16.3%   OP +12.9%   ZK +8.1%   STRK +22.4%   IMX +17.7%   ', speed:0.6,  y:H-GROUND_H-64, alpha:0.13 },
+    { txt:'  BTC.D 52.4%   TOTAL2 +9.8%   DXY -0.6%   FEAR&GREED 78   DOMINANCE ↑   ', speed:0.35, y:H-GROUND_H-78, alpha:0.09 },
+  ];
   ctx.font='11px monospace';
-  ctx.fillStyle=ph==='bull'?'rgba(0,220,100,0.4)':ph==='bear'?'rgba(220,50,50,0.4)':'rgba(0,200,80,0.4)';
-  const txt='  BTC +12.4%   ETH +8.2%   SOL +22.1%   DOGE +5.3%   BNB +3.8%   ';
-  const tw2=ctx.measureText(txt).width, tx=(frame*0.8)%tw2;
-  ctx.fillText(txt+txt,-tx,H-GROUND_H-8);
+  for(const t of tickers){
+    ctx.fillStyle=tickCol+t.alpha+')';
+    const tw2=ctx.measureText(t.txt).width, tx=(frame*t.speed)%tw2;
+    ctx.fillText(t.txt+t.txt,-tx,t.y);
+  }
 }
 
 function drawBgChart(cfg){
