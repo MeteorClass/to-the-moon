@@ -82,23 +82,36 @@ const sfx = {
 // Background music
 let musicTO;
 let musicNodes=[];
-function startMusic(){
+let currentMusicPhase='normal';
+
+// Normal: slow ambient lo-fi
+// Bull:   upbeat rising arpeggios (major, bright)
+// Bear:   slow descending minor (tense, dark)
+const MUSIC_SEQS = {
+  normal: { notes:[130,146,164,174,196,220,246,261], type:'sine',  step:0.5,  vol:0.035 },
+  bull:   { notes:[261,330,392,523,392,330,523,659], type:'triangle', step:0.25, vol:0.04 },
+  bear:   { notes:[220,196,174,164,146,130,110,98],  type:'sawtooth', step:0.45, vol:0.028 },
+};
+
+function startMusic(phase){
   stopMusic();
-  const seq=[130,146,164,174,196,220,246,261];
-  let t=AC.currentTime+0.1;
-  const loop=()=>{
+  currentMusicPhase = phase || 'normal';
+  const cfg = MUSIC_SEQS[currentMusicPhase];
+  let t = AC.currentTime + 0.1;
+  const loop = () => {
     if(AC.state==='closed') return;
-    seq.forEach((n,i)=>{
+    cfg.notes.forEach((n,i)=>{
       const o=AC.createOscillator(), g=AC.createGain();
-      o.connect(g); g.connect(AC.destination); o.type='sine'; o.frequency.value=n;
-      g.gain.setValueAtTime(0,t+i*0.5);
-      g.gain.linearRampToValueAtTime(0.035,t+i*0.5+0.05);
-      g.gain.exponentialRampToValueAtTime(0.001,t+i*0.5+0.45);
-      o.start(t+i*0.5); o.stop(t+i*0.5+0.5);
+      o.connect(g); g.connect(AC.destination);
+      o.type=cfg.type; o.frequency.value=n;
+      g.gain.setValueAtTime(0,t+i*cfg.step);
+      g.gain.linearRampToValueAtTime(cfg.vol,t+i*cfg.step+0.04);
+      g.gain.exponentialRampToValueAtTime(0.001,t+i*cfg.step+cfg.step*0.9);
+      o.start(t+i*cfg.step); o.stop(t+i*cfg.step+cfg.step);
       musicNodes.push(o);
     });
-    t+=seq.length*0.5;
-    musicTO=setTimeout(loop,(t-AC.currentTime-4)*1000);
+    t+=cfg.notes.length*cfg.step;
+    musicTO=setTimeout(loop,(t-AC.currentTime-3)*1000);
   };
   loop();
 }
@@ -145,12 +158,12 @@ function curCfg(){ return PHASE_CFG[curPhase()]; }
 // ── INPUT ────────────────────────────────────────────────
 function flap(){
   resumeAC();
-  if(state==='idle'){ state='playing'; rocket.vy=FLAP_V; sfx.flap(); startMusic(); }
+  if(state==='idle'){ state='playing'; rocket.vy=FLAP_V; sfx.flap(); startMusic('normal'); }
   else if(state==='playing'){
     rocket.vy=FLAP_V; sfx.flap();
     for(let i=0;i<6;i++) particles.push({x:rocket.x,y:rocket.y+rocket.h/2,vx:-Math.random()*3-1,vy:(Math.random()-0.5)*2,life:18,maxLife:18,r:Math.random()*4+2,col:['#ff9500','#ffcc00','#ff4500'][Math.floor(Math.random()*3)]});
   }
-  else if(state==='dead'){ initGame(); state='playing'; rocket.vy=FLAP_V; sfx.flap(); startMusic(); }
+  else if(state==='dead'){ initGame(); state='playing'; rocket.vy=FLAP_V; sfx.flap(); startMusic('normal'); }
 }
 document.addEventListener('keydown',e=>{ if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();flap();} });
 canvas.addEventListener('pointerdown',e=>{e.preventDefault();flap();});
@@ -177,10 +190,13 @@ function spawnCandle(){
     phaseIdx=(phaseIdx+1)%PHASE_ORDER.length;
     candlesInPhase=0;
     const newPh=curPhase(), newCfg=curCfg();
-    phaseAnnounce={label:newCfg.label, phase:newPh, life:130, maxLife:130};
-    if(newPh==='bull') sfx.bull();
-    else if(newPh==='bear') sfx.bear();
-    else sfx.normal();
+    // Only announce bull/bear, not normal
+    if(newPh!=='normal'){
+      phaseAnnounce={label:newCfg.label, phase:newPh, life:130, maxLife:130};
+    }
+    if(newPh==='bull'){ sfx.bull(); startMusic('bull'); }
+    else if(newPh==='bear'){ sfx.bear(); startMusic('bear'); }
+    else { sfx.normal(); startMusic('normal'); }
   }
 }
 
@@ -327,24 +343,28 @@ function scoreParticles(){
 }
 
 // ── HUD ──────────────────────────────────────────────────
+function dollarScore(s){ return '$'+s.toLocaleString(); }
 function drawHUD(){
-  // Score
+  // Score as dollar value
+  const ds=dollarScore(score);
   ctx.textAlign='center';
-  ctx.font='bold 52px Arial'; ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillText(score,W/2+3,93);
-  ctx.strokeStyle='#f7931a'; ctx.lineWidth=4; ctx.strokeText(score,W/2,90);
-  ctx.fillStyle='#fff'; ctx.fillText(score,W/2,90);
-  // Phase badge
+  ctx.font='bold 44px Arial'; ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillText(ds,W/2+3,93);
+  ctx.strokeStyle='#f7931a'; ctx.lineWidth=4; ctx.strokeText(ds,W/2,90);
+  ctx.fillStyle='#fff'; ctx.fillText(ds,W/2,90);
+  // Phase badge — only show for bull/bear
   const ph=curPhase(), cfg=curCfg();
-  const bw2=ph==='normal'?110:ph==='bull'?100:126;
-  ctx.fillStyle=ph==='normal'?'rgba(80,80,200,0.8)':ph==='bull'?'rgba(0,160,60,0.85)':'rgba(180,0,0,0.85)';
-  ctx.beginPath(); ctx.roundRect(W/2-bw2/2,100,bw2,22,6); ctx.fill();
-  ctx.font='bold 12px Arial'; ctx.fillStyle='#fff';
-  ctx.fillText(cfg.label,W/2,115);
-  // Phase progress bar
-  const total=PHASE_LIMIT[ph], done=candlesInPhase;
-  const barW=100, barX=W/2-barW/2;
-  ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.beginPath(); ctx.roundRect(barX,125,barW,5,3); ctx.fill();
-  ctx.fillStyle=cfg.color; ctx.beginPath(); ctx.roundRect(barX,125,barW*(done/total),5,3); ctx.fill();
+  if(ph!=='normal'){
+    const bw2=ph==='bull'?100:126;
+    ctx.fillStyle=ph==='bull'?'rgba(0,160,60,0.85)':'rgba(180,0,0,0.85)';
+    ctx.beginPath(); ctx.roundRect(W/2-bw2/2,100,bw2,22,6); ctx.fill();
+    ctx.font='bold 12px Arial'; ctx.fillStyle='#fff';
+    ctx.fillText(cfg.label,W/2,115);
+    // Phase progress bar
+    const total=PHASE_LIMIT[ph], done=candlesInPhase;
+    const barW=100, barX=W/2-barW/2;
+    ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.beginPath(); ctx.roundRect(barX,125,barW,5,3); ctx.fill();
+    ctx.fillStyle=cfg.color; ctx.beginPath(); ctx.roundRect(barX,125,barW*(done/total),5,3); ctx.fill();
+  }
 }
 
 // ── PHASE ANNOUNCE ───────────────────────────────────────
@@ -413,7 +433,7 @@ function drawIdle(){
   ctx.globalAlpha=1;
   if(bestScore>0){
     ctx.font='bold 17px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
-    ctx.strokeText(`Best: ${bestScore}`,W/2,H/2+60); ctx.fillText(`Best: ${bestScore}`,W/2,H/2+60);
+    ctx.strokeText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+60); ctx.fillText(`Best: ${dollarScore(bestScore)}`,W/2,H/2+60);
   }
   if(hof.length>0){
     ctx.font='bold 12px Arial'; ctx.fillStyle='rgba(255,200,80,0.75)';
@@ -430,9 +450,9 @@ function drawDead(){
   ctx.font='bold 40px Arial'; ctx.strokeStyle='#7a0000'; ctx.lineWidth=4;
   ctx.strokeText('RUGGED! 💀',W/2,H/2-112); ctx.fillStyle='#ff4444'; ctx.fillText('RUGGED! 💀',W/2,H/2-112);
   ctx.font='bold 22px Arial'; ctx.fillStyle='#fff'; ctx.strokeStyle='#333'; ctx.lineWidth=2;
-  ctx.strokeText(`Score: ${score}`,W/2,H/2-70); ctx.fillText(`Score: ${score}`,W/2,H/2-70);
+  ctx.strokeText(`Score: ${dollarScore(score)}`,W/2,H/2-70); ctx.fillText(`Score: ${dollarScore(score)}`,W/2,H/2-70);
   ctx.font='bold 18px Arial'; ctx.fillStyle='#f7931a'; ctx.strokeStyle='#7a3000'; ctx.lineWidth=2;
-  ctx.strokeText(`Best: ${bestScore}`,W/2,H/2-38); ctx.fillText(`Best: ${bestScore}`,W/2,H/2-38);
+  ctx.strokeText(`Best: ${dollarScore(bestScore)}`,W/2,H/2-38); ctx.fillText(`Best: ${dollarScore(bestScore)}`,W/2,H/2-38);
   const msgs=['Market crashed 📉','Candle got you 🕯️','HODL next time 💎','Bear market wins 🐻','Paper hands 📄'];
   ctx.font='italic 13px Arial'; ctx.fillStyle='rgba(255,150,100,0.8)'; ctx.fillText(msgs[score%msgs.length],W/2,H/2-12);
   // HOF
